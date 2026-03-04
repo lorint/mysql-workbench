@@ -19,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install .NET Framework 4.5 reference assemblies (workaround)
+      - name: Install .NET Framework 4.5 reference assemblies
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -47,6 +47,17 @@ jobs:
 
       - name: Restore NuGet packages
         run: nuget restore "${{ env.SOLUTION_FILE }}"
+        shell: pwsh
+
+      - name: Point WB_3DPARTY_PATH at MSYS2 MinGW64 prefix (so we can find Cairo headers)
+        run: |
+          "WB_3DPARTY_PATH=C:\msys64\mingw64" | Out-File -FilePath $env:GITHUB_ENV -Append
+        shell: pwsh
+
+      - name: Install MSVC-compatible Cairo
+        run: |
+          vcpkg install cairo:x64-windows
+          vcpkg integrate install
         shell: pwsh
 
       # Build the whole solution so C++/vcxproj dependencies compile too
