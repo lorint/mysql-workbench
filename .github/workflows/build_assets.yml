@@ -49,15 +49,15 @@ jobs:
         run: nuget restore "${{ env.SOLUTION_FILE }}"
         shell: pwsh
 
-      - name: Point WB_3DPARTY_PATH at MSYS2 MinGW64 prefix (so we can find Cairo headers)
+      - name: Install MSVC-compatible Cairo and find where it is installed
         run: |
-          "WB_3DPARTY_PATH=C:\msys64\mingw64" | Out-File -FilePath $env:GITHUB_ENV -Append
-        shell: pwsh
-
-      - name: Install MSVC-compatible Cairo
-        run: |
-          vcpkg install cairo:x64-windows
+          $ErrorActionPreference = "Stop"
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          vcpkg install cairo:x64-windows glib:x64-windows python3:x64-windows boost-locale:x64-windows --triplet x64-windows
           vcpkg integrate install
+
+          $env:VCPKG_CAIRO_INCLUDE_DIR = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
+          "VCPKG_CAIRO_INCLUDE_DIR=$env:VCPKG_CAIRO_INCLUDE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
         shell: pwsh
 
       # Build the whole solution so C++/vcxproj dependencies compile too
@@ -67,6 +67,7 @@ jobs:
           /m
           /p:Configuration=${{ matrix.configuration }}
           /p:Platform=${{ env.PLATFORM }}
+          /p:WB_3DPARTY_PATH=${{ env.VCPKG_CAIRO_INCLUDE_DIR }}
         shell: pwsh
 
       # Sanity check: confirm the EXE exists where your csproj outputs it
