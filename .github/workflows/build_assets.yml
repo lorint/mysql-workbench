@@ -1,5 +1,3 @@
-name: Build Assets
-
 on:
   push:
   workflow_dispatch:
@@ -11,21 +9,39 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [x64, x86]
-        configuration: [Release]   # You can change to Release_OSS or Release_Testing
+        configuration: [Release_OSS]
 
     env:
       SOLUTION_FILE: MySQLWorkbench.sln
+      PLATFORM: x64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # MSBuild from Visual Studio Build Tools on the runner
+      - name: Install .NET Framework 4.5 reference assemblies (workaround)
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          nuget install Microsoft.NETFramework.ReferenceAssemblies.net45 `
+            -OutputDirectory tools `
+            -ExcludeVersion
+
+          $src = Join-Path $PWD "tools\Microsoft.NETFramework.ReferenceAssemblies.net45\build\.NETFramework\v4.5"
+          if (!(Test-Path $src)) { throw "Reference assemblies not found at $src" }
+
+          $dst = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          Copy-Item -Path (Join-Path $src "*") -Destination $dst -Recurse -Force
+
+          Write-Host "Installed .NET 4.5 reference assemblies into: $dst"
+        shell: pwsh
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # NuGet restore for .NET Framework style solutions
+      # Optional but often helpful for older solutions that use packages.config
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
@@ -33,45 +49,32 @@ jobs:
         run: nuget restore "${{ env.SOLUTION_FILE }}"
         shell: pwsh
 
+      # Build the whole solution so C++/vcxproj dependencies compile too
       - name: Build
         run: >
           msbuild "${{ env.SOLUTION_FILE }}"
           /m
           /p:Configuration=${{ matrix.configuration }}
-          /p:Platform=${{ matrix.platform }}
-          /p:RestorePackages=false
+          /p:Platform=${{ env.PLATFORM }}
         shell: pwsh
 
-      # Find the built EXE(s) and stage them for upload
-      - name: Collect EXE outputs
+      # Sanity check: confirm the EXE exists where your csproj outputs it
+      - name: Verify EXE exists
         run: |
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-
-          # Grab EXEs under bin\<Configuration>\ and bin\<Platform>\<Configuration>\ etc.
-          $exe = Get-ChildItem -Path . -Recurse -Filter *.exe |
-            Where-Object {
-              $_.FullName -match "\\bin\\" -and
-              $_.FullName -match "\\${{ matrix.configuration }}\\" -and
-              $_.Name -notmatch "vshost\.exe$"
-            }
-
-          if (-not $exe) {
-            Write-Host "No EXEs found. Dumping bin folders for debugging:"
-            Get-ChildItem -Path . -Recurse -Directory |
-              Where-Object { $_.FullName -match "\\bin(\\" + "|\$)" } |
-              Select-Object -First 50 | ForEach-Object { $_.FullName }
-            throw "Build succeeded but no EXE was discovered by the collector step."
+          $exe = "bin\x64\${{ matrix.configuration }}\MySQLWorkbench.exe"
+          if (!(Test-Path $exe)) {
+            Write-Host "Expected EXE not found at: $exe"
+            Write-Host "Showing bin\x64 tree for debugging:"
+            Get-ChildItem -Path "bin\x64" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            throw "Build completed but EXE not found."
           }
-
-          $exe | ForEach-Object {
-            Copy-Item $_.FullName -Destination (Join-Path artifacts $_.Name) -Force
-            Write-Host "Collected: $($_.FullName)"
-          }
+          Write-Host "Found: $exe"
         shell: pwsh
 
-      - name: Upload build artifact
+      # Upload the whole output directory (EXE + DLLs + content files)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MySQLWorkbench-${{ matrix.configuration }}-${{ matrix.platform }}
-          path: artifacts/*.exe
+          name: MySQLWorkbench-${{ matrix.configuration }}-x64
+          path: bin\x64\${{ matrix.configuration }}\
           if-no-files-found: error
