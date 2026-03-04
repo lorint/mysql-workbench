@@ -958,7 +958,7 @@ void UtilitiesWrapper::store_password(const std::string &service, const std::str
  * Return the plain text password for the given service and account.
  */
 bool UtilitiesWrapper::find_password(const std::string &service, const std::string &account, std::string &password) {
-  logDebug("Looking up password for service: %s, account: %s\n", service.c_str(), account.c_str());
+  logError("Looking up password for service: %s, account: %s\n", service.c_str(), account.c_str());
 
   base::MutexLock lock(password_mutex);
   load_passwords();
@@ -967,8 +967,10 @@ bool UtilitiesWrapper::find_password(const std::string &service, const std::stri
   PasswordIterator iterator = password_cache.find(service + DOMAIN_SEPARATOR + account);
   if (iterator == password_cache.end())
     result = false;
-  else
+  else {
     password = iterator->second;
+    logError("  Found: %s\n", password.c_str());
+  }
 
   unload_passwords(false);
   return result;

@@ -1,0 +1,77 @@
+name: Build Assets
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, x86]
+        configuration: [Release]   # You can change to Release_OSS or Release_Testing
+
+    env:
+      SOLUTION_FILE: MySQLWorkbench.sln
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # MSBuild from Visual Studio Build Tools on the runner
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      # NuGet restore for .NET Framework style solutions
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore "${{ env.SOLUTION_FILE }}"
+        shell: pwsh
+
+      - name: Build
+        run: >
+          msbuild "${{ env.SOLUTION_FILE }}"
+          /m
+          /p:Configuration=${{ matrix.configuration }}
+          /p:Platform=${{ matrix.platform }}
+          /p:RestorePackages=false
+        shell: pwsh
+
+      # Find the built EXE(s) and stage them for upload
+      - name: Collect EXE outputs
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+
+          # Grab EXEs under bin\<Configuration>\ and bin\<Platform>\<Configuration>\ etc.
+          $exe = Get-ChildItem -Path . -Recurse -Filter *.exe |
+            Where-Object {
+              $_.FullName -match "\\bin\\" -and
+              $_.FullName -match "\\${{ matrix.configuration }}\\" -and
+              $_.Name -notmatch "vshost\.exe$"
+            }
+
+          if (-not $exe) {
+            Write-Host "No EXEs found. Dumping bin folders for debugging:"
+            Get-ChildItem -Path . -Recurse -Directory |
+              Where-Object { $_.FullName -match "\\bin(\\" + "|\$)" } |
+              Select-Object -First 50 | ForEach-Object { $_.FullName }
+            throw "Build succeeded but no EXE was discovered by the collector step."
+          }
+
+          $exe | ForEach-Object {
+            Copy-Item $_.FullName -Destination (Join-Path artifacts $_.Name) -Force
+            Write-Host "Collected: $($_.FullName)"
+          }
+        shell: pwsh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySQLWorkbench-${{ matrix.configuration }}-${{ matrix.platform }}
+          path: artifacts/*.exe
+          if-no-files-found: error
