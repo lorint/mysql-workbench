@@ -49,7 +49,21 @@ jobs:
         run: nuget restore "${{ env.SOLUTION_FILE }}"
         shell: pwsh
 
-      - name: Install MSVC-compatible Cairo and find where it is installed
+      - name: Set up VCPKG binary cache, part 1
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\vcpkg-bincache | Out-Null
+          "VCPKG_DEFAULT_BINARY_CACHE=C:\vcpkg-bincache" | Out-File $env:GITHUB_ENV -Append
+          "VCPKG_FEATURE_FLAGS=manifests,binarycaching"  | Out-File $env:GITHUB_ENV -Append
+      - name: Set up VCPKG binary cache, part 2
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-bincache
+          key: vcpkg-bincache-${{ runner.os }}-x64-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            vcpkg-bincache-${{ runner.os }}-x64-
+
+      - name: Install MSVC dependencies
         run: |
           $ErrorActionPreference = "Stop"
           $env:VCPKG_ROOT = "C:\vcpkg"
