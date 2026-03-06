@@ -49,39 +49,66 @@ jobs:
         run: nuget restore "${{ env.SOLUTION_FILE }}"
         shell: pwsh
 
-      - name: Set up VCPKG binary cache, part 1
+      - name: Prepare vcpkg binary cache
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path C:\vcpkg-bincache | Out-Null
           "VCPKG_DEFAULT_BINARY_CACHE=C:\vcpkg-bincache" | Out-File $env:GITHUB_ENV -Append
-          "VCPKG_FEATURE_FLAGS=manifests,binarycaching"  | Out-File $env:GITHUB_ENV -Append
-      - name: Set up VCPKG binary cache, part 2
-        uses: actions/cache@v4
+          "VCPKG_BINARY_SOURCES=clear;files,C:\vcpkg-bincache,readwrite" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache-restore
+        uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-${{ hashFiles('**/vcpkg.json') }}
+          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2
           restore-keys: |
             vcpkg-bincache-${{ runner.os }}-x64-
 
       - name: Install MSVC dependencies
         run: |
           $ErrorActionPreference = "Stop"
-          $env:VCPKG_ROOT = "C:\vcpkg"
-          vcpkg install cairo:x64-windows glib:x64-windows python3:x64-windows boost-locale:x64-windows --triplet x64-windows
+          $root = "C:\vcpkg\installed\x64-windows"
+          vcpkg install cairo:x64-windows glib:x64-windows python3:x64-windows `
+            boost-locale:x64-windows boost-signals2:x64-windows `
+            rapidjson:x64-windows libxml2:x64-windows --triplet x64-windows
           vcpkg integrate install
 
-          $env:VCPKG_CAIRO_INCLUDE_DIR = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
-          "VCPKG_CAIRO_INCLUDE_DIR=$env:VCPKG_CAIRO_INCLUDE_DIR" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $libxmlIncludeDir = Join-Path $root "include\libxml2"
+          if (!(Test-Path (Join-Path $libxmlIncludeDir "libxml\tree.h"))) {
+            throw "Expected libxml/tree.h not found under $libxmlIncludeDir"
+          }
+          "LIBXML2_INCLUDE_DIR=$libxmlIncludeDir" | Out-File $env:GITHUB_ENV -Append
+
+          $pythonH = Get-ChildItem $root -Recurse -Filter Python.h -ErrorAction Stop |
+            Select-Object -First 1
+          $libxmlTree = Get-ChildItem $root -Recurse -Filter tree.h -ErrorAction Stop |
+            Where-Object { $_.FullName -match '\\libxml\\tree\.h$' } |
+            Select-Object -First 1
+          Write-Output $pythonH
+          "VCPKG_INCLUDE_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PYTHON_INCLUDE_DIR=$($pythonH.FullName | Split-Path -Parent)" | Out-File $env:GITHUB_ENV -Append
+          "LIBXML2_INCLUDE_DIR=$($libxmlTree.FullName | Split-Path -Parent)" | Out-File $env:GITHUB_ENV -Append
         shell: pwsh
+
+      - name: Save vcpkg binary cache
+        if: always() # && steps.vcpkg-cache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\vcpkg-bincache
+          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2
 
       # Build the whole solution so C++/vcxproj dependencies compile too
       - name: Build
         run: >
+          $env:WB_3DPARTY_PATH = "${{ env.VCPKG_INCLUDE_DIR }}"
+
           msbuild "${{ env.SOLUTION_FILE }}"
           /m
           /p:Configuration=${{ matrix.configuration }}
           /p:Platform=${{ env.PLATFORM }}
-          /p:WB_3DPARTY_PATH=${{ env.VCPKG_CAIRO_INCLUDE_DIR }}
+          /p:AdditionalIncludeDirectories="${{ env.VCPKG_INCLUDE_DIR }}%3B${{ env.PYTHON_INCLUDE_DIR }}%3B${{ env.LIBXML2_INCLUDE_DIR }}"
+          # /p:WB_3DPARTY_PATH=${{ env.VCPKG_INCLUDE_DIR }}
         shell: pwsh
 
       # Sanity check: confirm the EXE exists where your csproj outputs it

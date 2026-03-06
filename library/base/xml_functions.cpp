@@ -22,6 +22,8 @@
  * 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA 
  */
 
+#pragma warning(disable : 4996)
+
 #include "base/xml_functions.h"
 #include "base/log.h"
 #include "base/string_utilities.h"
