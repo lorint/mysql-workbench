@@ -61,9 +61,15 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2
+          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2-libssh-swig
           restore-keys: |
             vcpkg-bincache-${{ runner.os }}-x64-
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Install MSVC dependencies
         run: |
@@ -71,7 +77,8 @@ jobs:
           $root = "C:\vcpkg\installed\x64-windows"
           vcpkg install cairo:x64-windows glib:x64-windows python3:x64-windows `
             boost-locale:x64-windows boost-signals2:x64-windows `
-            rapidjson:x64-windows libxml2:x64-windows --triplet x64-windows
+            rapidjson:x64-windows libxml2:x64-windows `
+            libssh:x64-windows swig:x64-windows --triplet x64-windows
           vcpkg integrate install
 
           $libxmlIncludeDir = Join-Path $root "include\libxml2"
@@ -96,7 +103,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2
+          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2-libssh-swig
 
       # Build the whole solution so C++/vcxproj dependencies compile too
       - name: Build
