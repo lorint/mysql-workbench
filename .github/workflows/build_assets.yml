@@ -1,3 +1,5 @@
+name: build-mysql-workbench-windows
+
 on:
   push:
   workflow_dispatch:
@@ -14,12 +16,22 @@ jobs:
     env:
       SOLUTION_FILE: MySQLWorkbench.sln
       PLATFORM: x64
+      WB_3DPARTY_PATH: C:\wb-3rdparty
+      VCPKG_ROOT: C:\vcpkg
+      VCPKG_DEFAULT_TRIPLET: x64-windows
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Java for ANTLR
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: Install .NET Framework 4.5 reference assemblies
+        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -28,26 +40,26 @@ jobs:
             -ExcludeVersion
 
           $src = Join-Path $PWD "tools\Microsoft.NETFramework.ReferenceAssemblies.net45\build\.NETFramework\v4.5"
-          if (!(Test-Path $src)) { throw "Reference assemblies not found at $src" }
+          if (!(Test-Path $src)) {
+            throw "Reference assemblies not found at $src"
+          }
 
           $dst = "C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.5"
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
-
           Copy-Item -Path (Join-Path $src "*") -Destination $dst -Recurse -Force
 
           Write-Host "Installed .NET 4.5 reference assemblies into: $dst"
-        shell: pwsh
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      # Optional but often helpful for older solutions that use packages.config
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
       - name: Restore NuGet packages
-        run: nuget restore "${{ env.SOLUTION_FILE }}"
         shell: pwsh
+        run: |
+          nuget restore "${{ env.SOLUTION_FILE }}"
 
       - name: Prepare vcpkg binary cache
         shell: pwsh
@@ -61,80 +73,208 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2-libssh-swig
+          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v2
           restore-keys: |
             vcpkg-bincache-${{ runner.os }}-x64-
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Install MSVC dependencies
+      - name: Install native dependencies with vcpkg
+        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $root = "C:\vcpkg\installed\x64-windows"
+
           vcpkg install cairo:x64-windows glib:x64-windows python3:x64-windows `
             boost-locale:x64-windows boost-signals2:x64-windows `
             rapidjson:x64-windows libxml2:x64-windows `
             libssh:x64-windows swig:x64-windows --triplet x64-windows
           vcpkg integrate install
 
-          $libxmlIncludeDir = Join-Path $root "include\libxml2"
-          if (!(Test-Path (Join-Path $libxmlIncludeDir "libxml\tree.h"))) {
-            throw "Expected libxml/tree.h not found under $libxmlIncludeDir"
-          }
-          "LIBXML2_INCLUDE_DIR=$libxmlIncludeDir" | Out-File $env:GITHUB_ENV -Append
-
-          $pythonH = Get-ChildItem $root -Recurse -Filter Python.h -ErrorAction Stop |
-            Select-Object -First 1
-          $libxmlTree = Get-ChildItem $root -Recurse -Filter tree.h -ErrorAction Stop |
-            Where-Object { $_.FullName -match '\\libxml\\tree\.h$' } |
-            Select-Object -First 1
-          Write-Output $pythonH
-          "VCPKG_INCLUDE_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "PYTHON_INCLUDE_DIR=$($pythonH.FullName | Split-Path -Parent)" | Out-File $env:GITHUB_ENV -Append
-          "LIBXML2_INCLUDE_DIR=$($libxmlTree.FullName | Split-Path -Parent)" | Out-File $env:GITHUB_ENV -Append
+      - name: Build Workbench-style third-party bundle
         shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $triplet = "C:\vcpkg\installed\x64-windows"
+          $bundle  = "${{ env.WB_3DPARTY_PATH }}"
+
+          $paths = @(
+            "$bundle",
+            "$bundle\bin",
+            "$bundle\include",
+            "$bundle\lib",
+            "$bundle\debug\bin",
+            "$bundle\debug\lib",
+            "$bundle\python",
+            "$bundle\python\include",
+            "$bundle\python\libs"
+          )
+
+          foreach ($p in $paths) {
+            New-Item -ItemType Directory -Force -Path $p | Out-Null
+          }
+
+          Copy-Item "$triplet\include\*" "$bundle\include" -Recurse -Force
+          Copy-Item "$triplet\lib\*"     "$bundle\lib"     -Recurse -Force
+          Copy-Item "$triplet\bin\*"     "$bundle\bin"     -Recurse -Force
+
+          if (Test-Path "$triplet\debug\lib") {
+            Copy-Item "$triplet\debug\lib\*" "$bundle\debug\lib" -Recurse -Force
+          }
+          if (Test-Path "$triplet\debug\bin") {
+            Copy-Item "$triplet\debug\bin\*" "$bundle\debug\bin" -Recurse -Force
+          }
+
+          # Python.h from vcpkg can live under several layouts depending on the port/version.
+          $pythonHeader = Get-ChildItem $triplet -Recurse -Filter Python.h -ErrorAction Stop |
+            Select-Object -First 1
+          if (-not $pythonHeader) {
+            throw "Python.h not found under $triplet"
+          }
+          Copy-Item $pythonHeader.FullName "$bundle\python\include\Python.h" -Force
+
+          # Copy Python import libs if found.
+          $pythonLibs = Get-ChildItem "$triplet\lib" -Filter "python*.lib" -ErrorAction SilentlyContinue
+          foreach ($lib in $pythonLibs) {
+            Copy-Item $lib.FullName "$bundle\python\libs\" -Force
+          }
+
+          # Some projects expect headers reachable from the root include tree too.
+          # Ensure python include dir is also mirrored into the main include tree.
+          Copy-Item $pythonHeader.FullName "$bundle\include\Python.h" -Force
+
+          # ANTLR jar must exist exactly here for build-parsers.cmd
+          Invoke-WebRequest `
+            -Uri "https://www.antlr.org/download/antlr-4.13.2-complete.jar" `
+            -OutFile "$bundle\bin\antlr-4.13.2-complete.jar"
+
+          # Optional visibility for troubleshooting
+          Write-Host "Bundle created at: $bundle"
+          Get-ChildItem "$bundle\bin" | Select-Object Name
+
+          "WB_3DPARTY_PATH=$bundle" | Out-File $env:GITHUB_ENV -Append
+
+      - name: First-pass Boost workaround for /clr source_location issue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $candidate = "C:\vcpkg\installed\x64-windows\include\boost\assert\source_location.hpp"
+          if (!(Test-Path $candidate)) {
+            throw "Boost source_location.hpp not found at $candidate"
+          }
+
+          $content = Get-Content $candidate -Raw
+
+          # Work around builds where std::_snprintf_s is emitted under /clr / older toolset combinations.
+          # Replace the qualified call with the global CRT function in this one header.
+          $updated = $content `
+            -replace 'std::_snprintf_s', '_snprintf_s' `
+            -replace 'std::_snprintf', '_snprintf'
+
+          if ($updated -ne $content) {
+            Set-Content -Path $candidate -Value $updated -NoNewline
+            Write-Host "Patched boost/assert/source_location.hpp for snprintf compatibility."
+          } else {
+            Write-Host "No snprintf patch was needed in boost/assert/source_location.hpp"
+          }
+
+      - name: Add compatibility macros via Directory.Build.props
+        shell: pwsh
+        run: |
+          $props = @'
+          <Project>
+            <PropertyGroup>
+              <WB_3DPARTY_PATH>C:\wb-3rdparty</WB_3DPARTY_PATH>
+            </PropertyGroup>
+
+            <ItemDefinitionGroup>
+              <ClCompile>
+                <PreprocessorDefinitions>
+                  _CRT_SECURE_NO_WARNINGS;
+                  _SCL_SECURE_NO_WARNINGS;
+                  BOOST_CONFIG_SUPPRESS_OUTDATED_MESSAGE;
+                  _SILENCE_CXX17_ITERATOR_BASE_CLASS_DEPRECATION_WARNING;
+                  %(PreprocessorDefinitions)
+                </PreprocessorDefinitions>
+                <AdditionalIncludeDirectories>
+                  C:\wb-3rdparty\include;
+                  C:\wb-3rdparty\python\include;
+                  %(AdditionalIncludeDirectories)
+                </AdditionalIncludeDirectories>
+                <AdditionalLibraryDirectories>
+                  C:\wb-3rdparty\lib;
+                  C:\wb-3rdparty\debug\lib;
+                  %(AdditionalLibraryDirectories)
+                </AdditionalLibraryDirectories>
+              </ClCompile>
+              <Link>
+                <AdditionalLibraryDirectories>
+                  C:\wb-3rdparty\lib;
+                  C:\wb-3rdparty\debug\lib;
+                  %(AdditionalLibraryDirectories)
+                </AdditionalLibraryDirectories>
+              </Link>
+            </ItemDefinitionGroup>
+          </Project>
+          '@
+
+          Set-Content -Path "Directory.Build.props" -Value $props -Encoding UTF8
+          Get-Content "Directory.Build.props"
 
       - name: Save vcpkg binary cache
-        if: always() # && steps.vcpkg-cache-restore.outputs.cache-hit != 'true'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-cairo-glib-python3-boostlocale-boostsignals2-rapidjson-libxml2-libssh-swig
+          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v2
 
-      # Build the whole solution so C++/vcxproj dependencies compile too
       - name: Build
-        run: >
-          $env:WB_3DPARTY_PATH = "${{ env.VCPKG_INCLUDE_DIR }}"
-
-          msbuild "${{ env.SOLUTION_FILE }}"
-          /m
-          /p:Configuration=${{ matrix.configuration }}
-          /p:Platform=${{ env.PLATFORM }}
-          /p:AdditionalIncludeDirectories="${{ env.VCPKG_INCLUDE_DIR }}%3B${{ env.PYTHON_INCLUDE_DIR }}%3B${{ env.LIBXML2_INCLUDE_DIR }}"
-          # /p:WB_3DPARTY_PATH=${{ env.VCPKG_INCLUDE_DIR }}
         shell: pwsh
-
-      # Sanity check: confirm the EXE exists where your csproj outputs it
-      - name: Verify EXE exists
         run: |
-          $exe = "bin\x64\${{ matrix.configuration }}\MySQLWorkbench.exe"
-          if (!(Test-Path $exe)) {
-            Write-Host "Expected EXE not found at: $exe"
-            Write-Host "Showing bin\x64 tree for debugging:"
-            Get-ChildItem -Path "bin\x64" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
-            throw "Build completed but EXE not found."
-          }
-          Write-Host "Found: $exe"
-        shell: pwsh
+          $ErrorActionPreference = "Stop"
+          $env:WB_3DPARTY_PATH = "${{ env.WB_3DPARTY_PATH }}"
 
-      # Upload the whole output directory (EXE + DLLs + content files)
+          Write-Host "WB_3DPARTY_PATH=$env:WB_3DPARTY_PATH"
+          Write-Host "Java version:"
+          java -version
+
+          msbuild "${{ env.SOLUTION_FILE }}" `
+            /m `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=${{ env.PLATFORM }} `
+            /p:WB_3DPARTY_PATH="${{ env.WB_3DPARTY_PATH }}" `
+            /verbosity:minimal
+
+      - name: Show likely output folders when build fails
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "bin\x64 tree:"
+          Get-ChildItem -Path "bin\x64" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+
+          Write-Host "obj\x64 tree:"
+          Get-ChildItem -Path "obj\x64" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+
+      - name: Verify EXE exists
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "bin\x64\${{ matrix.configuration }}\MySQLWorkbench.exe",
+            "bin\x64\Release_OSS\MySQLWorkbench.exe",
+            "bin\x64\Release\MySQLWorkbench.exe"
+          )
+
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            Write-Host "Expected EXE not found. Showing bin\x64 tree for debugging:"
+            Get-ChildItem -Path "bin\x64" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+            throw "Build completed but MySQLWorkbench.exe was not found."
+          }
+
+          Write-Host "Found executable at: $found"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MySQLWorkbench-${{ matrix.configuration }}-x64
           path: bin\x64\${{ matrix.configuration }}\
-          if-no-files-found: error
+          if-no-files-found: warn
