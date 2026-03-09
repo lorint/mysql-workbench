@@ -215,16 +215,30 @@ jobs:
           "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           "WB_3DPARTY_PATH=$env:RUNNER_TEMP\wb-3rdparty" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Install base native dependencies with vcpkg
+      - name: Install ANTLR runtime with vcpkg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            antlr4-runtime:x64-windows `
+            antlr4-runtime:x64-windows
+
+      - name: Install Boost and RapidJSON dependencies with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
             boost-locale:x64-windows `
             boost-signals2:x64-windows `
-            rapidjson:x64-windows `
+            rapidjson:x64-windows
+
+      - name: Install PCRE, SQLite, and libzip with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
             pcre:x64-windows `
             sqlite3:x64-windows `
             libzip:x64-windows
