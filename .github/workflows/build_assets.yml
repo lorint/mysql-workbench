@@ -152,8 +152,6 @@ jobs:
     needs: validate
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.thirdparty_archive_url != '' }}
     runs-on: windows-2022
-    env:
-      WB_3DPARTY_PATH: ${{ runner.temp }}\wb-3rdparty
 
     steps:
       - name: Checkout
@@ -190,6 +188,12 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           nuget restore $env:SOLUTION_FILE
+
+      - name: Set third-party bundle path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          "WB_3DPARTY_PATH=$env:RUNNER_TEMP\wb-3rdparty" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Download third-party bundle archive
         shell: pwsh
