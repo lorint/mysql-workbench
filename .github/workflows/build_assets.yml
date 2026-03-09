@@ -4,11 +4,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-    inputs:
-      thirdparty_archive_url:
-        description: "HTTPS URL to a zip file that already contains the Workbench WB_3DPARTY_PATH layout"
-        required: false
-        type: string
 
 env:
   SOLUTION_FILE: MySQLWorkbench.sln
@@ -143,14 +138,14 @@ jobs:
           - Configuration/platform: $env:CONFIGURATION|$env:PLATFORM
           - Hosted prerequisites: MSBuild, NuGet, Java, .NET Framework 4.5 reference assemblies, Visual Studio v142 toolset
 
-          Assumption:
-          - A full Windows build still requires the repository's external WB_3DPARTY_PATH bundle, which is not stored in this repository.
-          - The build job below only runs for manual dispatch when a zip URL for that bundle is provided.
+          Build assumptions carried into the next job:
+          - The workflow assembles the expected WB_3DPARTY_PATH layout inside CI from package-manager steps.
+          - vsqlite++ source is not present in this repository, so the build job creates a compatibility shim for that legacy import if no real binary is available.
+          - Some runtime-only files copied by PrepareOutputDir.cmd are best-effort because missing copies there do not stop compilation.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
   build:
     needs: validate
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.thirdparty_archive_url != '' }}
     runs-on: windows-2022
 
     steps:
@@ -162,6 +157,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x64"
 
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
@@ -189,80 +190,295 @@ jobs:
           $ErrorActionPreference = "Stop"
           nuget restore $env:SOLUTION_FILE
 
-      - name: Set third-party bundle path
+      - name: Install Python runtime packages used by packaging
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          python -m pip install --upgrade pip
+          python -m pip install pyodbc
+
+      - name: Install SWIG
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install swig --yes --no-progress
+          $null = Get-Command swig -ErrorAction Stop
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          git clone https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP\vcpkg"
+          & "$env:RUNNER_TEMP\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+
+          "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           "WB_3DPARTY_PATH=$env:RUNNER_TEMP\wb-3rdparty" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Download third-party bundle archive
-        shell: pwsh
-        env:
-          THIRD_PARTY_ARCHIVE_URL: ${{ inputs.thirdparty_archive_url }}
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $archivePath = Join-Path $env:RUNNER_TEMP "wb-3rdparty.zip"
-          Invoke-WebRequest -Uri $env:THIRD_PARTY_ARCHIVE_URL -OutFile $archivePath
-
-          if (!(Test-Path $archivePath)) {
-            throw "Third-party bundle archive was not downloaded."
-          }
-
-      - name: Extract and validate third-party bundle
+      - name: Install native dependencies with vcpkg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $archivePath = Join-Path $env:RUNNER_TEMP "wb-3rdparty.zip"
-          $extractRoot = Join-Path $env:RUNNER_TEMP "wb-3rdparty-extracted"
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            antlr4-runtime:x64-windows `
+            boost-locale:x64-windows `
+            boost-signals2:x64-windows `
+            rapidjson:x64-windows `
+            libxml2:x64-windows `
+            glib:x64-windows `
+            cairo:x64-windows `
+            sqlite3:x64-windows `
+            libzip:x64-windows `
+            libssh:x64-windows `
+            gdal:x64-windows `
+            pcre:x64-windows `
+            mysql-connector-cpp:x64-windows `
+            libmysql:x64-windows
 
-          if (Test-Path $extractRoot) {
-            Remove-Item $extractRoot -Recurse -Force
-          }
+      - name: Install HtmlRenderer assembly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          nuget install HtmlRenderer.WinForms -OutputDirectory .gha\nuget -ExcludeVersion
 
-          Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force
+      - name: Build WB_3DPARTY_PATH bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
-          $candidateRoots = @($extractRoot)
-          $candidateRoots += Get-ChildItem $extractRoot -Directory | Select-Object -ExpandProperty FullName
+          $bundle = $env:WB_3DPARTY_PATH
+          $triplet = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
+          $pythonRoot = $env:pythonLocation
 
-          $bundleRoot = $candidateRoots |
-            Where-Object {
-              (Test-Path (Join-Path $_ "include")) -and
-              (Test-Path (Join-Path $_ "lib")) -and
-              (Test-Path (Join-Path $_ "bin")) -and
-              (Test-Path (Join-Path $_ "Python\Include\Python.h"))
-            } |
-            Select-Object -First 1
-
-          if (-not $bundleRoot) {
-            throw "No extracted directory matched the expected WB_3DPARTY_PATH layout."
-          }
-
-          $requiredPaths = @(
-            "include\antlr4-runtime",
-            "lib\antlr4-runtime.lib",
-            "lib\mysqlcppconn.lib",
-            "lib\ssh.lib",
-            "Python\Include\Python.h",
-            "Python\libs\python312.lib",
-            "bin\antlr-4.13.2-complete.jar"
+          $dirs = @(
+            $bundle,
+            "$bundle\bin",
+            "$bundle\include",
+            "$bundle\include\sqlite",
+            "$bundle\include\mysql",
+            "$bundle\include\cppconn",
+            "$bundle\lib",
+            "$bundle\lib\glib-2.0\include",
+            "$bundle\lib\libzip\include",
+            "$bundle\Python",
+            "$bundle\Python\Include",
+            "$bundle\Python\Lib",
+            "$bundle\Python\Libs",
+            "$bundle\Python\DLLs",
+            "$bundle\Python\site-packages"
           )
 
-          $missing = foreach ($relativePath in $requiredPaths) {
-            $fullPath = Join-Path $bundleRoot $relativePath
-            if (!(Test-Path $fullPath)) {
-              $relativePath
+          foreach ($dir in $dirs) {
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          }
+
+          function Copy-TreeIfExists {
+            param(
+              [string]$Source,
+              [string]$Destination
+            )
+
+            if (Test-Path $Source) {
+              New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+              Copy-Item -Path (Join-Path $Source '*') -Destination $Destination -Recurse -Force
             }
           }
 
-          if ($missing) {
-            $missingList = $missing -join ", "
-            throw "The provided third-party bundle is missing required paths: $missingList"
+          function Find-FirstFile {
+            param(
+              [string]$Root,
+              [string[]]$Patterns
+            )
+
+            foreach ($pattern in $Patterns) {
+              $match = Get-ChildItem -Path $Root -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+              if ($match) {
+                return $match.FullName
+              }
+            }
+
+            return $null
           }
 
-          New-Item -ItemType Directory -Force -Path $env:WB_3DPARTY_PATH | Out-Null
-          Copy-Item -Path (Join-Path $bundleRoot "*") -Destination $env:WB_3DPARTY_PATH -Recurse -Force
+          function Copy-AliasFile {
+            param(
+              [string]$Root,
+              [string[]]$Patterns,
+              [string]$Destination
+            )
+
+            $source = Find-FirstFile -Root $Root -Patterns $Patterns
+            if (!$source) {
+              throw "Could not find any of: $($Patterns -join ', ') under $Root"
+            }
+
+            Copy-Item -Path $source -Destination $Destination -Force
+          }
+
+          # Copy the native dependency trees. This preserves layouts such as glib-2.0/include.
+          Copy-TreeIfExists -Source (Join-Path $triplet 'include') -Destination "$bundle\include"
+          Copy-TreeIfExists -Source (Join-Path $triplet 'lib') -Destination "$bundle\lib"
+          Copy-TreeIfExists -Source (Join-Path $triplet 'bin') -Destination "$bundle\lib"
+          Copy-TreeIfExists -Source (Join-Path $triplet 'tools\gdal') -Destination "$bundle\bin"
+
+          # Mirror the common binary tools folder too. Some ports put executables here.
+          Copy-TreeIfExists -Source (Join-Path $triplet 'tools') -Destination "$bundle\tools"
+
+          # Python runtime from setup-python. The repo explicitly expects Python 3.12 names.
+          Copy-TreeIfExists -Source (Join-Path $pythonRoot 'include') -Destination "$bundle\Python\Include"
+          Copy-TreeIfExists -Source (Join-Path $pythonRoot 'Lib') -Destination "$bundle\Python\lib"
+          Copy-TreeIfExists -Source (Join-Path $pythonRoot 'libs') -Destination "$bundle\Python\Libs"
+          Copy-TreeIfExists -Source (Join-Path $pythonRoot 'DLLs') -Destination "$bundle\Python\DLLs"
+
+          $pythonExe = Find-FirstFile -Root $pythonRoot -Patterns @('python.exe')
+          $pythonDll = Find-FirstFile -Root $pythonRoot -Patterns @('python312.dll')
+          $pythonLib = Find-FirstFile -Root $pythonRoot -Patterns @('python312.lib')
+
+          if (!$pythonExe -or !$pythonDll -or !$pythonLib) {
+            throw "Python 3.12 runtime artifacts were not found under $pythonRoot"
+          }
+
+          Copy-Item -Path $pythonExe -Destination "$bundle\Python\python.exe" -Force
+          Copy-Item -Path $pythonDll -Destination "$bundle\Python\python312.dll" -Force
+          Copy-Item -Path $pythonLib -Destination "$bundle\Python\Libs\python312.lib" -Force
+
+          $sitePackages = python -c "import site; print(site.getsitepackages()[0])"
+          $sitePackages = "$sitePackages".Trim()
+          if ($sitePackages -and (Test-Path $sitePackages)) {
+            Copy-TreeIfExists -Source $sitePackages -Destination "$bundle\Python\site-packages"
+          }
+
+          # Legacy include layouts expected by the checked-in .props files.
+          Copy-AliasFile -Root $triplet -Patterns @('sqlite3.h') -Destination "$bundle\include\sqlite\sqlite3.h"
+          $sqliteExt = Find-FirstFile -Root $triplet -Patterns @('sqlite3ext.h')
+          if ($sqliteExt) {
+            Copy-Item -Path $sqliteExt -Destination "$bundle\include\sqlite\sqlite3ext.h" -Force
+          }
+
+          $mysqlHeader = Find-FirstFile -Root $triplet -Patterns @('mysql.h')
+          $mysqlHeaderDir = $null
+          if ($mysqlHeader) {
+            $mysqlHeaderDir = Split-Path $mysqlHeader -Parent
+          }
+          if (!$mysqlHeaderDir) {
+            throw "mysql.h was not found in the installed dependency tree"
+          }
+          Copy-TreeIfExists -Source $mysqlHeaderDir -Destination "$bundle\include\mysql"
+
+          $cppconnHeader = Find-FirstFile -Root $triplet -Patterns @('driver.h')
+          $cppconnDir = $null
+          if ($cppconnHeader) {
+            $cppconnDir = Split-Path $cppconnHeader -Parent
+          }
+          if (!$cppconnDir) {
+            throw "Connector/C++ headers were not found in the installed dependency tree"
+          }
+          if ((Split-Path $cppconnDir -Leaf) -ne 'cppconn') {
+            $cppconnDir = Get-ChildItem -Path $triplet -Recurse -Directory -Filter cppconn -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (!$cppconnDir) {
+            throw "cppconn include directory was not found"
+          }
+          Copy-TreeIfExists -Source $cppconnDir -Destination "$bundle\include\cppconn"
+
+          if (Test-Path "$bundle\include\zipconf.h") {
+            Copy-Item -Path "$bundle\include\zipconf.h" -Destination "$bundle\lib\libzip\include\zipconf.h" -Force
+          }
+
+          # Normalize legacy library names expected by this repo.
+          Copy-AliasFile -Root $triplet -Patterns @('antlr4-runtime.lib') -Destination "$bundle\lib\antlr4-runtime.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('cairo.lib') -Destination "$bundle\lib\cairo.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('gdal.lib') -Destination "$bundle\lib\gdal.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('glib-2.0.lib') -Destination "$bundle\lib\glib-2.0.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('gmodule-2.0.lib') -Destination "$bundle\lib\gmodule-2.0.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('gobject-2.0.lib') -Destination "$bundle\lib\gobject-2.0.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('gthread-2.0.lib') -Destination "$bundle\lib\gthread-2.0.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('libxml2.lib') -Destination "$bundle\lib\libxml2.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('pcre.lib') -Destination "$bundle\lib\pcre.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('pcrecpp.lib') -Destination "$bundle\lib\pcrecpp.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('sqlite3.lib') -Destination "$bundle\lib\sqlite3.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('ssh.lib', 'libssh.lib') -Destination "$bundle\lib\ssh.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('zip.lib') -Destination "$bundle\lib\zip.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('zlib1.lib', 'zlib.lib') -Destination "$bundle\lib\zlib1.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('libmysql.lib', 'mysqlclient.lib', 'mysql.lib') -Destination "$bundle\lib\mysqlclient.lib"
+          Copy-AliasFile -Root $triplet -Patterns @('mysqlcppconn.lib', 'mysqlcppconn8.lib', 'mysqlcppconn-static.lib') -Destination "$bundle\lib\mysqlcppconn.lib"
+
+          # Runtime DLL aliases used by PrepareOutputDir.cmd are best-effort compatibility copies.
+          $dllAliases = @(
+            @{ Patterns = @('antlr4-runtime.dll'); Destination = "$bundle\lib\antlr4-runtime.dll" }
+            @{ Patterns = @('cairo-2.dll', 'cairo.dll'); Destination = "$bundle\lib\cairo-2.dll" }
+            @{ Patterns = @('libcrypto-3-x64.dll', 'libcrypto-3.dll', 'libcrypto-3*.dll'); Destination = "$bundle\lib\libcrypto-3-x64.dll" }
+            @{ Patterns = @('libssl-3-x64.dll', 'libssl-3.dll', 'libssl-3*.dll'); Destination = "$bundle\lib\libssl-3-x64.dll" }
+            @{ Patterns = @('libxml2.dll'); Destination = "$bundle\lib\libxml2.dll" }
+            @{ Patterns = @('iconv.dll', 'libiconv.dll'); Destination = "$bundle\lib\iconv.dll" }
+            @{ Patterns = @('libpng16.dll', 'libpng16*.dll'); Destination = "$bundle\lib\libpng16.dll" }
+            @{ Patterns = @('pixman-1-0.dll', 'pixman*.dll'); Destination = "$bundle\lib\pixman-1-0.dll" }
+            @{ Patterns = @('sqlite3.dll'); Destination = "$bundle\lib\sqlite3.dll" }
+            @{ Patterns = @('zlib1.dll', 'zlib.dll'); Destination = "$bundle\lib\zlib.dll" }
+            @{ Patterns = @('ssh.dll', 'libssh.dll'); Destination = "$bundle\lib\ssh.dll" }
+            @{ Patterns = @('zip.dll'); Destination = "$bundle\lib\zip.dll" }
+            @{ Patterns = @('gdal*.dll'); Destination = $null }
+          )
+
+          foreach ($dllAlias in $dllAliases) {
+            $source = Find-FirstFile -Root $triplet -Patterns $dllAlias.Patterns
+            if ($source) {
+              $destination = $dllAlias.Destination
+              if (!$destination) {
+                $destination = Join-Path "$bundle\lib" (Split-Path $source -Leaf)
+              }
+              Copy-Item -Path $source -Destination $destination -Force
+            }
+          }
+
+          # HTML renderer assembly for the managed wrapper project.
+          $htmlRenderer = Find-FirstFile -Root (Join-Path $PWD '.gha\nuget') -Patterns @('HtmlRenderer.dll')
+          if (!$htmlRenderer) {
+            throw "HtmlRenderer.dll was not restored from NuGet"
+          }
+          Copy-Item -Path $htmlRenderer -Destination "$bundle\lib\HtmlRenderer.dll" -Force
+
+          # ANTLR jar is required by library/parsers/grammars/build-parsers.cmd.
+          Invoke-WebRequest `
+            -Uri "https://www.antlr.org/download/antlr-4.13.2-complete.jar" `
+            -OutFile "$bundle\bin\antlr-4.13.2-complete.jar"
+
+          # Copy JDBC connector DLL if present so the output bundle has a matching runtime library.
+          $cppconnDll = Find-FirstFile -Root $triplet -Patterns @('mysqlcppconn-10-vs14.dll', 'mysqlcppconn8-*.dll', 'mysqlcppconn*.dll')
+          if ($cppconnDll) {
+            Copy-Item -Path $cppconnDll -Destination "$bundle\lib\$(Split-Path $cppconnDll -Leaf)" -Force
+          }
+
+          # Build a tiny compatibility shim if the legacy vsqlite++ import library is missing.
+          # The repo links against vsqlite++.lib, but no vsqlite++ source exists here.
+          if (!(Test-Path "$bundle\lib\vsqlite++.lib")) {
+            $shimDir = Join-Path $env:RUNNER_TEMP 'vsqlite-shim'
+            New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
+
+            @'
+            #include <windows.h>
+            extern "C" __declspec(dllexport) void wb_vsqlite_placeholder(void) {}
+            BOOL APIENTRY DllMain(void* hModule, unsigned long ul_reason_for_call, void* lpReserved) { return 1; }
+            '@ | Set-Content -Path (Join-Path $shimDir 'vsqlite_shim.cpp') -Encoding ASCII
+
+            & cl.exe /nologo /LD /EHsc /Fe:"$shimDir\vsqlite++.dll" "$shimDir\vsqlite_shim.cpp" /link /IMPLIB:"$shimDir\vsqlite++.lib"
+            Copy-Item -Path "$shimDir\vsqlite++.lib" -Destination "$bundle\lib\vsqlite++.lib" -Force
+            Copy-Item -Path "$shimDir\vsqlite++.dll" -Destination "$bundle\lib\vsqlite++.dll" -Force
+          }
+
+          @"
+          WB_3DPARTY_PATH assembled at $bundle
+
+          Notes:
+          - vcpkg provided the bulk of the native headers and libraries.
+          - setup-python provided the Python 3.12 embed headers, import library, stdlib, and DLLs.
+          - HtmlRenderer.dll came from NuGet.
+          - vsqlite++ was shimmed only because this repository does not contain its source.
+          - Runtime-only copies performed later by PrepareOutputDir.cmd remain best-effort.
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Build Release_OSS x64
         shell: pwsh
@@ -275,6 +491,16 @@ jobs:
             /p:Platform=$env:PLATFORM `
             /p:WB_3DPARTY_PATH="$env:WB_3DPARTY_PATH" `
             /verbosity:minimal
+
+      - name: Show output folders when build fails
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "bin tree:"
+          Get-ChildItem -Path bin -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+
+          Write-Host "obj tree:"
+          Get-ChildItem -Path obj -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
 
       - name: Verify expected output
         shell: pwsh
