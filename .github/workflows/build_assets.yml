@@ -243,15 +243,29 @@ jobs:
             sqlite3:x64-windows `
             libzip:x64-windows
 
-      - name: Install graphics and XML dependencies with vcpkg
+      - name: Install libxml2 with vcpkg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            libxml2:x64-windows `
+            libxml2:x64-windows
+
+      - name: Install glib and cairo with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
             glib:x64-windows `
-            cairo:x64-windows `
+            cairo:x64-windows
+
+      - name: Install GDAL with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
             gdal:x64-windows
 
       - name: Install database connectivity dependencies with vcpkg
