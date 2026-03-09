@@ -233,14 +233,22 @@ jobs:
             boost-signals2:x64-windows `
             rapidjson:x64-windows
 
-      - name: Install PCRE, SQLite, and libzip with vcpkg
+      - name: Install GDAL (and with it SQLite3) with vcpkg
+        shell: pwsh
+        run: |
+          # Note that this also installs sqlite3:x64-windows
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            gdal:x64-windows
+
+      - name: Install PCRE and libzip with vcpkg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
             pcre:x64-windows `
-            sqlite3:x64-windows `
             libzip:x64-windows
 
       - name: Install libxml2 with vcpkg
@@ -259,14 +267,6 @@ jobs:
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
             glib:x64-windows `
             cairo:x64-windows
-
-      - name: Install GDAL with vcpkg
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            gdal:x64-windows
 
       - name: Install database connectivity dependencies with vcpkg
         shell: pwsh
