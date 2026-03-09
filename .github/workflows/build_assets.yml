@@ -215,7 +215,7 @@ jobs:
           "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           "WB_3DPARTY_PATH=$env:RUNNER_TEMP\wb-3rdparty" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Install native dependencies with vcpkg
+      - name: Install base native dependencies with vcpkg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -225,15 +225,29 @@ jobs:
             boost-locale:x64-windows `
             boost-signals2:x64-windows `
             rapidjson:x64-windows `
+            pcre:x64-windows `
+            sqlite3:x64-windows `
+            libzip:x64-windows
+
+      - name: Install graphics and XML dependencies with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
             libxml2:x64-windows `
             glib:x64-windows `
             cairo:x64-windows `
-            sqlite3:x64-windows `
-            libzip:x64-windows `
+            gdal:x64-windows
+
+      - name: Install database connectivity dependencies with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
             libssh:x64-windows `
-            gdal:x64-windows `
-            pcre:x64-windows `
-            mysql-connector-cpp:x64-windows `
+            "mysql-connector-cpp[jdbc]:x64-windows" `
             libmysql:x64-windows
 
       - name: Install HtmlRenderer assembly
