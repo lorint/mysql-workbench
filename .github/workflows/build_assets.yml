@@ -221,7 +221,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            antlr4-runtime:x64-windows
+            antlr4:x64-windows
 
       - name: Install Boost and RapidJSON dependencies with vcpkg
         shell: pwsh
