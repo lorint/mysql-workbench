@@ -520,10 +520,10 @@ jobs:
             New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
 
             @'
-            #include <windows.h>
-            extern "C" __declspec(dllexport) void wb_vsqlite_placeholder(void) {}
-            BOOL APIENTRY DllMain(void* hModule, unsigned long ul_reason_for_call, void* lpReserved) { return 1; }
-            '@ | Set-Content -Path (Join-Path $shimDir 'vsqlite_shim.cpp') -Encoding ASCII
+          #include <windows.h>
+          extern "C" __declspec(dllexport) void wb_vsqlite_placeholder(void) {}
+          BOOL APIENTRY DllMain(void* hModule, unsigned long ul_reason_for_call, void* lpReserved) { return 1; }
+          '@ | Set-Content -Path (Join-Path $shimDir 'vsqlite_shim.cpp') -Encoding ASCII
 
             & cl.exe /nologo /LD /EHsc /Fe:"$shimDir\vsqlite++.dll" "$shimDir\vsqlite_shim.cpp" /link /IMPLIB:"$shimDir\vsqlite++.lib"
             Copy-Item -Path "$shimDir\vsqlite++.lib" -Destination "$bundle\lib\vsqlite++.lib" -Force
