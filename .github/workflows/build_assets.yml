@@ -229,6 +229,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            mysql-connector-cpp:x64-windows `
             boost-locale:x64-windows `
             boost-signals2:x64-windows `
             rapidjson:x64-windows
@@ -275,7 +276,7 @@ jobs:
 
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
             libssh:x64-windows `
-            "mysql-connector-cpp[jdbc]:x64-windows" `
+            "mysql-connector-cpp[jdbc]:x64-windows-static" `
             libmysql:x64-windows
 
       - name: Install HtmlRenderer assembly
@@ -290,7 +291,10 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $bundle = $env:WB_3DPARTY_PATH
-          $triplet = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
+          $triplets = @(
+            (Join-Path $env:VCPKG_ROOT "installed\x64-windows"),
+            (Join-Path $env:VCPKG_ROOT "installed\x64-windows-static")
+          )
           $pythonRoot = $env:pythonLocation
 
           $dirs = @(
@@ -329,15 +333,21 @@ jobs:
 
           function Find-FirstFile {
             param(
-              [string]$Root,
+              [string[]]$Roots,
               [string[]]$Patterns
             )
 
-            foreach ($pattern in $Patterns) {
-              $match = Get-ChildItem -Path $Root -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-              if ($match) {
-                return $match.FullName
+            foreach ($root in $Roots) {
+              if (!(Test-Path $root)) {
+                continue
+              }
+
+              foreach ($pattern in $Patterns) {
+                $match = Get-ChildItem -Path $root -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+                if ($match) {
+                  return $match.FullName
+                }
               }
             }
 
@@ -346,27 +356,31 @@ jobs:
 
           function Copy-AliasFile {
             param(
-              [string]$Root,
+              [string[]]$Roots,
               [string[]]$Patterns,
               [string]$Destination
             )
 
-            $source = Find-FirstFile -Root $Root -Patterns $Patterns
+            $source = Find-FirstFile -Roots $Roots -Patterns $Patterns
             if (!$source) {
-              throw "Could not find any of: $($Patterns -join ', ') under $Root"
+              throw "Could not find any of: $($Patterns -join ', ') under $($Roots -join ', ')"
             }
 
             Copy-Item -Path $source -Destination $Destination -Force
           }
 
           # Copy the native dependency trees. This preserves layouts such as glib-2.0/include.
-          Copy-TreeIfExists -Source (Join-Path $triplet 'include') -Destination "$bundle\include"
-          Copy-TreeIfExists -Source (Join-Path $triplet 'lib') -Destination "$bundle\lib"
-          Copy-TreeIfExists -Source (Join-Path $triplet 'bin') -Destination "$bundle\lib"
-          Copy-TreeIfExists -Source (Join-Path $triplet 'tools\gdal') -Destination "$bundle\bin"
+          foreach ($triplet in $triplets) {
+            Copy-TreeIfExists -Source (Join-Path $triplet 'include') -Destination "$bundle\include"
+            Copy-TreeIfExists -Source (Join-Path $triplet 'lib') -Destination "$bundle\lib"
+            Copy-TreeIfExists -Source (Join-Path $triplet 'bin') -Destination "$bundle\lib"
+            Copy-TreeIfExists -Source (Join-Path $triplet 'tools\gdal') -Destination "$bundle\bin"
+          }
 
           # Mirror the common binary tools folder too. Some ports put executables here.
-          Copy-TreeIfExists -Source (Join-Path $triplet 'tools') -Destination "$bundle\tools"
+          foreach ($triplet in $triplets) {
+            Copy-TreeIfExists -Source (Join-Path $triplet 'tools') -Destination "$bundle\tools"
+          }
 
           # Python runtime from setup-python. The repo explicitly expects Python 3.12 names.
           Copy-TreeIfExists -Source (Join-Path $pythonRoot 'include') -Destination "$bundle\Python\Include"
@@ -393,13 +407,13 @@ jobs:
           }
 
           # Legacy include layouts expected by the checked-in .props files.
-          Copy-AliasFile -Root $triplet -Patterns @('sqlite3.h') -Destination "$bundle\include\sqlite\sqlite3.h"
-          $sqliteExt = Find-FirstFile -Root $triplet -Patterns @('sqlite3ext.h')
+          Copy-AliasFile -Roots $triplets -Patterns @('sqlite3.h') -Destination "$bundle\include\sqlite\sqlite3.h"
+          $sqliteExt = Find-FirstFile -Roots $triplets -Patterns @('sqlite3ext.h')
           if ($sqliteExt) {
             Copy-Item -Path $sqliteExt -Destination "$bundle\include\sqlite\sqlite3ext.h" -Force
           }
 
-          $mysqlHeader = Find-FirstFile -Root $triplet -Patterns @('mysql.h')
+          $mysqlHeader = Find-FirstFile -Roots $triplets -Patterns @('mysql.h')
           $mysqlHeaderDir = $null
           if ($mysqlHeader) {
             $mysqlHeaderDir = Split-Path $mysqlHeader -Parent
@@ -409,7 +423,7 @@ jobs:
           }
           Copy-TreeIfExists -Source $mysqlHeaderDir -Destination "$bundle\include\mysql"
 
-          $cppconnHeader = Find-FirstFile -Root $triplet -Patterns @('driver.h')
+          $cppconnHeader = Find-FirstFile -Roots $triplets -Patterns @('driver.h')
           $cppconnDir = $null
           if ($cppconnHeader) {
             $cppconnDir = Split-Path $cppconnHeader -Parent
@@ -418,8 +432,13 @@ jobs:
             throw "Connector/C++ headers were not found in the installed dependency tree"
           }
           if ((Split-Path $cppconnDir -Leaf) -ne 'cppconn') {
-            $cppconnDir = Get-ChildItem -Path $triplet -Recurse -Directory -Filter cppconn -ErrorAction SilentlyContinue |
-              Select-Object -First 1 -ExpandProperty FullName
+            foreach ($triplet in $triplets) {
+              $cppconnDir = Get-ChildItem -Path $triplet -Recurse -Directory -Filter cppconn -ErrorAction SilentlyContinue |
+                Select-Object -First 1 -ExpandProperty FullName
+              if ($cppconnDir) {
+                break
+              }
+            }
           }
           if (!$cppconnDir) {
             throw "cppconn include directory was not found"
@@ -431,22 +450,22 @@ jobs:
           }
 
           # Normalize legacy library names expected by this repo.
-          Copy-AliasFile -Root $triplet -Patterns @('antlr4-runtime.lib') -Destination "$bundle\lib\antlr4-runtime.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('cairo.lib') -Destination "$bundle\lib\cairo.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('gdal.lib') -Destination "$bundle\lib\gdal.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('glib-2.0.lib') -Destination "$bundle\lib\glib-2.0.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('gmodule-2.0.lib') -Destination "$bundle\lib\gmodule-2.0.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('gobject-2.0.lib') -Destination "$bundle\lib\gobject-2.0.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('gthread-2.0.lib') -Destination "$bundle\lib\gthread-2.0.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('libxml2.lib') -Destination "$bundle\lib\libxml2.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('pcre.lib') -Destination "$bundle\lib\pcre.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('pcrecpp.lib') -Destination "$bundle\lib\pcrecpp.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('sqlite3.lib') -Destination "$bundle\lib\sqlite3.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('ssh.lib', 'libssh.lib') -Destination "$bundle\lib\ssh.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('zip.lib') -Destination "$bundle\lib\zip.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('zlib1.lib', 'zlib.lib') -Destination "$bundle\lib\zlib1.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('libmysql.lib', 'mysqlclient.lib', 'mysql.lib') -Destination "$bundle\lib\mysqlclient.lib"
-          Copy-AliasFile -Root $triplet -Patterns @('mysqlcppconn.lib', 'mysqlcppconn8.lib', 'mysqlcppconn-static.lib') -Destination "$bundle\lib\mysqlcppconn.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('antlr4-runtime.lib') -Destination "$bundle\lib\antlr4-runtime.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('cairo.lib') -Destination "$bundle\lib\cairo.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('gdal.lib') -Destination "$bundle\lib\gdal.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('glib-2.0.lib') -Destination "$bundle\lib\glib-2.0.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('gmodule-2.0.lib') -Destination "$bundle\lib\gmodule-2.0.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('gobject-2.0.lib') -Destination "$bundle\lib\gobject-2.0.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('gthread-2.0.lib') -Destination "$bundle\lib\gthread-2.0.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('libxml2.lib') -Destination "$bundle\lib\libxml2.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('pcre.lib') -Destination "$bundle\lib\pcre.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('pcrecpp.lib') -Destination "$bundle\lib\pcrecpp.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('sqlite3.lib') -Destination "$bundle\lib\sqlite3.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('ssh.lib', 'libssh.lib') -Destination "$bundle\lib\ssh.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('zip.lib') -Destination "$bundle\lib\zip.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('zlib1.lib', 'zlib.lib') -Destination "$bundle\lib\zlib1.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('libmysql.lib', 'mysqlclient.lib', 'mysql.lib') -Destination "$bundle\lib\mysqlclient.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('mysqlcppconn.lib', 'mysqlcppconn8.lib', 'mysqlcppconn-static.lib', 'mysqlcppconn8-static.lib', 'mysqlcppconn8-static-mt.lib', 'mysqlcppconn8-static-mt-mt.lib') -Destination "$bundle\lib\mysqlcppconn.lib"
 
           # Runtime DLL aliases used by PrepareOutputDir.cmd are best-effort compatibility copies.
           $dllAliases = @(
@@ -466,7 +485,7 @@ jobs:
           )
 
           foreach ($dllAlias in $dllAliases) {
-            $source = Find-FirstFile -Root $triplet -Patterns $dllAlias.Patterns
+            $source = Find-FirstFile -Roots $triplets -Patterns $dllAlias.Patterns
             if ($source) {
               $destination = $dllAlias.Destination
               if (!$destination) {
@@ -489,7 +508,7 @@ jobs:
             -OutFile "$bundle\bin\antlr-4.13.2-complete.jar"
 
           # Copy JDBC connector DLL if present so the output bundle has a matching runtime library.
-          $cppconnDll = Find-FirstFile -Root $triplet -Patterns @('mysqlcppconn-10-vs14.dll', 'mysqlcppconn8-*.dll', 'mysqlcppconn*.dll')
+          $cppconnDll = Find-FirstFile -Roots $triplets -Patterns @('mysqlcppconn-10-vs14.dll', 'mysqlcppconn8-*.dll', 'mysqlcppconn*.dll')
           if ($cppconnDll) {
             Copy-Item -Path $cppconnDll -Destination "$bundle\lib\$(Split-Path $cppconnDll -Leaf)" -Force
           }
