@@ -215,6 +215,24 @@ jobs:
           "VCPKG_ROOT=$env:RUNNER_TEMP\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           "WB_3DPARTY_PATH=$env:RUNNER_TEMP\wb-3rdparty" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+
+      - name: Prepare vcpkg binary cache
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\vcpkg-bincache | Out-Null
+          "VCPKG_DEFAULT_BINARY_CACHE=C:\vcpkg-bincache" | Out-File $env:GITHUB_ENV -Append
+          "VCPKG_BINARY_SOURCES=clear;files,C:\vcpkg-bincache,readwrite" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Restore vcpkg binary cache
+        id: vcpkg-cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: C:\vcpkg-bincache
+          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v2
+          restore-keys: |
+            vcpkg-bincache-${{ runner.os }}-x64-
+
+
       - name: Install ANTLR runtime with vcpkg
         shell: pwsh
         run: |
@@ -284,6 +302,15 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           nuget install HtmlRenderer.WinForms -OutputDirectory .gha\nuget -ExcludeVersion
+
+
+      - name: Save vcpkg binary cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: C:\vcpkg-bincache
+          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v2
+
 
       - name: Find mysql connector libs
         shell: pwsh
