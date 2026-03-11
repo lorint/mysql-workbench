@@ -26,7 +26,7 @@
 
 #include "wb_tunnel.h"
 
-#include "mysql_driver.h"
+#include "jdbc/mysql_driver.h"
 #include "cppconn/driver.h"
 #include "cppconn/statement.h"
 #include "cppconn/exception.h"

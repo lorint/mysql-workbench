@@ -152,6 +152,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Setup Java for ANTLR tooling
         uses: actions/setup-java@v4
         with:
@@ -578,6 +583,7 @@ jobs:
             /p:Configuration=$env:CONFIGURATION `
             /p:Platform=$env:PLATFORM `
             /p:WB_3DPARTY_PATH="$env:WB_3DPARTY_PATH" `
+            /p:AdditionalIncludeDirectories="$env:WB_3DPARTY_PATH\jdbc" `
             /verbosity:minimal
 
       - name: Show output folders when build fails
