@@ -285,6 +285,75 @@ jobs:
           $ErrorActionPreference = "Stop"
           nuget install HtmlRenderer.WinForms -OutputDirectory .gha\nuget -ExcludeVersion
 
+      - name: Find mysql connector libs
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:VCPKG_ROOT\installed" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'mysqlcppconn*.lib' } |
+            Select-Object FullName
+
+      - name: Rename mysql-connector-cpp static library
+        shell: pwsh
+        run: |
+          $roots = @(
+            Join-Path $env:VCPKG_ROOT 'installed\x64-windows\lib'
+            Join-Path $env:VCPKG_ROOT 'installed\x64-windows-static\lib'
+          ) | Where-Object { Test-Path $_ }
+
+          $candidates = foreach ($root in $roots) {
+            Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Name -in @(
+                  'mysqlcppconn.lib',
+                  'mysqlcppconn8.lib',
+                  'mysqlcppconnx.lib',
+                  'mysqlcppconn-static.lib',
+                  'mysqlcppconn8-static.lib',
+                  'mysqlcppconn8-static-mt.lib',
+                  'mysqlcppconnx-static.lib'
+                  'mysqlcppconnx-static-mt.lib'
+                )
+              }
+          }
+
+          if (-not $candidates) {
+            throw "Could not find any mysql connector static library under: $($roots -join ', ')"
+          }
+
+          $chosen = $candidates |
+            Sort-Object @{
+              Expression = {
+                switch ($_.Name) {
+                  'mysqlcppconnx-static-mt.lib'    { 0 }
+                  'mysqlcppconnx-static.lib'       { 1 }
+                  'mysqlcppconn8-static-mt-mt.lib' { 2 }
+                  'mysqlcppconn8-static-mt.lib'    { 3 }
+                  'mysqlcppconn8-static.lib'       { 4 }
+                  'mysqlcppconn-static.lib'        { 5 }
+                  'mysqlcppconn8.lib'              { 6 }
+                  'mysqlcppconn.lib'               { 7 }
+                  default                          { 99 }
+                }
+              }
+            }, FullName |
+            Select-Object -First 1
+
+          $destRoot = if (Test-Path (Join-Path $env:VCPKG_ROOT 'installed\x64-windows-static\lib')) {
+            Join-Path $env:VCPKG_ROOT 'installed\x64-windows-static\lib'
+          } else {
+            Join-Path $env:VCPKG_ROOT 'installed\x64-windows\lib'
+          }
+
+          New-Item -ItemType Directory -Force -Path $destRoot | Out-Null
+
+          Write-Host "Using source: $($chosen.FullName)"
+          Write-Host "Copying to:   $destRoot"
+
+          Copy-Item $chosen.FullName (Join-Path $destRoot 'mysqlcppconnx-static.lib') -Force
+          Copy-Item $chosen.FullName (Join-Path $destRoot 'mysqlcppconn8-static-mt.lib') -Force
+          Copy-Item $chosen.FullName (Join-Path $destRoot 'mysqlcppconn8-static.lib') -Force
+          Copy-Item $chosen.FullName (Join-Path $destRoot 'mysqlcppconn-static.lib') -Force
+
       - name: Build WB_3DPARTY_PATH bundle
         shell: pwsh
         run: |
