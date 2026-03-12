@@ -497,7 +497,7 @@ jobs:
           Copy-AliasFile -Roots $triplets -Patterns @('zip.lib') -Destination "$bundle\lib\zip.lib"
           Copy-AliasFile -Roots $triplets -Patterns @('zlib1.lib', 'zlib.lib') -Destination "$bundle\lib\zlib1.lib"
           Copy-AliasFile -Roots $triplets -Patterns @('libmysql.lib', 'mysqlclient.lib', 'mysql.lib') -Destination "$bundle\lib\mysqlclient.lib"
-          Copy-AliasFile -Roots $triplets -Patterns @('mysqlcppconn.lib', 'mysqlcppconn8.lib', 'mysqlcppconnx.lib', 'mysqlcppconn-static.lib', 'mysqlcppconn8-static.lib', 'mysqlcppconn8-static-mt.lib', 'mysqlcppconnx-static-mt.lib', 'mysqlcppconn8-static-mt-mt.lib') -Destination "$bundle\lib\mysqlcppconn.lib"
+          Copy-AliasFile -Roots $triplets -Patterns @('mysqlcppconn.lib', 'mysqlcppconn8.lib', 'mysqlcppconn-static.lib', 'mysqlcppconn8-static.lib', 'mysqlcppconn8-static-mt.lib', 'mysqlcppconn8-static-mt-mt.lib', 'mysqlcppconn*.lib') -Destination "$bundle\lib\mysqlcppconn.lib"
 
           # Runtime DLL aliases used by PrepareOutputDir.cmd are best-effort compatibility copies.
           $dllAliases = @(
@@ -539,10 +539,25 @@ jobs:
             -Uri "https://www.antlr.org/download/antlr-4.13.2-complete.jar" `
             -OutFile "$bundle\bin\antlr-4.13.2-complete.jar"
 
+          Write-Host "=== Connector/C++ files under vcpkg ==="
+          Get-ChildItem -Recurse "D:\a\_temp\vcpkg\installed\x64-windows" -Include *.lib,*.dll |
+            Where-Object { $_.Name -match 'mysqlcppconn' } |
+            Sort-Object FullName |
+            Select-Object FullName, Name
+
           # Copy JDBC connector DLL if present so the output bundle has a matching runtime library.
-          $cppconnDll = Find-FirstFile -Roots $triplets -Patterns @('mysqlcppconn-10-vs14.dll', 'mysqlcppconn8-*.dll', 'mysqlcppconn*.dll')
-          if ($cppconnDll) {
-            Copy-Item -Path $cppconnDll -Destination "$bundle\lib\$(Split-Path $cppconnDll -Leaf)" -Force
+          # $cppconnDll = Find-FirstFile -Roots $triplets -Patterns @('mysqlcppconn-10-vs14.dll', 'mysqlcppconn8-*.dll', 'mysqlcppconn*.dll')
+          # if ($cppconnDll) {
+          #   Write-Output "TACOSALAD: $bundle\bin\ $cppconnDll"
+          #   Copy-Item -Path $cppconnDll -Destination "$bundle\bin\mysqlcppconn-10-vs14.dll" -Force
+          # }
+
+          $classicDll = Get-ChildItem -Recurse "D:\a\_temp\vcpkg\installed\x64-windows" `
+            -Filter "mysqlcppconn-*-vs14.dll" |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if ($classicDll) {
+            Copy-Item $classicDll "$bundle\bin\" -Force
           }
 
           # Build a tiny compatibility shim if the legacy vsqlite++ import library is missing.
@@ -573,6 +588,13 @@ jobs:
           - Runtime-only copies performed later by PrepareOutputDir.cmd remain best-effort.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
+      - name: Find static library for database connectivity dependencies
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse "D:\a\_temp\vcpkg\installed\x64-windows-static" -Include *.lib |
+            Where-Object { $_.Name -match 'mysqlcppconn|jdbc' } |
+            Select-Object FullName, Name
+
       - name: Build Release_OSS x64
         shell: pwsh
         run: |
@@ -586,15 +608,15 @@ jobs:
             /p:AdditionalIncludeDirectories="$env:WB_3DPARTY_PATH\jdbc" `
             /verbosity:minimal
 
-      - name: Show output folders when build fails
-        if: failure()
-        shell: pwsh
-        run: |
-          Write-Host "bin tree:"
-          Get-ChildItem -Path bin -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+      # - name: Show output folders when build fails
+      #   if: failure()
+      #   shell: pwsh
+      #   run: |
+      #     Write-Host "bin tree:"
+      #     Get-ChildItem -Path bin -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
 
-          Write-Host "obj tree:"
-          Get-ChildItem -Path obj -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+      #     Write-Host "obj tree:"
+      #     Get-ChildItem -Path obj -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
 
       - name: Verify expected output
         shell: pwsh
