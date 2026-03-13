@@ -325,6 +325,13 @@ jobs:
       #     & "$env:VCPKG_ROOT\vcpkg.exe" remove mysql-connector-cpp:x64-windows-static --recurse
       #     & "$env:VCPKG_ROOT\vcpkg.exe" install mysql-connector-cpp[core,jdbc]:x64-windows-static-v142
 
+      - name: Install sqlitecpp with vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            sqlite3:x64-windows sqlitecpp:x64-windows
+
       - name: Build WB_3DPARTY_PATH bundle
         shell: pwsh
         run: |
@@ -366,6 +373,11 @@ jobs:
             )
 
             if (Test-Path $Source) {
+              Write-Output "-- TACO $Source --"
+              Get-ChildItem -Recurse $Source | Select-Object FullName
+              # Get-ChildItem -Recurse D:\a\_temp -Filter database_exception.hpp | Select-Object FullName
+              Write-Output "------"
+
               New-Item -ItemType Directory -Force -Path $Destination | Out-Null
               Copy-Item -Path (Join-Path $Source '*') -Destination $Destination -Recurse -Force
             }
@@ -566,22 +578,34 @@ jobs:
             Copy-Item $classicDll "$bundle\bin\" -Force
           }
 
-          # Build a tiny compatibility shim if the legacy vsqlite++ import library is missing.
-          # The repo links against vsqlite++.lib, but no vsqlite++ source exists here.
-          if (!(Test-Path "$bundle\lib\vsqlite++.lib")) {
-            $shimDir = Join-Path $env:RUNNER_TEMP 'vsqlite-shim'
-            New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
+          # # Build a tiny compatibility shim if the legacy vsqlite++ import library is missing.
+          # # The repo links against vsqlite++.lib, but no vsqlite++ source exists here.
+          # if (!(Test-Path "$bundle\lib\vsqlite++.lib")) {
+          #   $shimDir = Join-Path $env:RUNNER_TEMP 'vsqlite-shim'
+          #   New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
 
-            @'
-          #include <windows.h>
-          extern "C" __declspec(dllexport) void wb_vsqlite_placeholder(void) {}
-          BOOL APIENTRY DllMain(void* hModule, unsigned long ul_reason_for_call, void* lpReserved) { return 1; }
-          '@ | Set-Content -Path (Join-Path $shimDir 'vsqlite_shim.cpp') -Encoding ASCII
+          #   @'
+          # #include <windows.h>
+          # extern "C" __declspec(dllexport) void wb_vsqlite_placeholder(void) {}
+          # BOOL APIENTRY DllMain(void* hModule, unsigned long ul_reason_for_call, void* lpReserved) { return 1; }
+          # '@ | Set-Content -Path (Join-Path $shimDir 'vsqlite_shim.cpp') -Encoding ASCII
 
-            & cl.exe /nologo /LD /EHsc /Fe:"$shimDir\vsqlite++.dll" "$shimDir\vsqlite_shim.cpp" /link /IMPLIB:"$shimDir\vsqlite++.lib"
-            Copy-Item -Path "$shimDir\vsqlite++.lib" -Destination "$bundle\lib\vsqlite++.lib" -Force
-            Copy-Item -Path "$shimDir\vsqlite++.dll" -Destination "$bundle\lib\vsqlite++.dll" -Force
-          }
+          #   & cl.exe /nologo /LD /EHsc /Fe:"$shimDir\vsqlite++.dll" "$shimDir\vsqlite_shim.cpp" /link /IMPLIB:"$shimDir\vsqlite++.lib"
+          #   Copy-Item -Path "$shimDir\vsqlite++.lib" -Destination "$bundle\lib\vsqlite++.lib" -Force
+          #   Copy-Item -Path "$shimDir\vsqlite++.dll" -Destination "$bundle\lib\vsqlite++.dll" -Force
+          # }
+
+          # Avoid:  D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp(98,9): error C2039: '_snprintf_s': is not a member of 'std'
+          $boostHdr = "D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp"
+          (Get-Content $boostHdr) `
+            -replace 'std::_snprintf_s', '_snprintf_s' `
+            | Set-Content $boostHdr
+
+          # # Avoid:  D:\a\mysql-workbench\mysql-workbench\library\forms\swig\cairo_wrap.cxx(5422,53): error C2660: 'SWIG_Python_AppendOutput': function does not take 2 arguments
+          # $swigWrap = "D:\a\mysql-workbench\mysql-workbench\library\forms\swig\cairo_wrap.cxx"
+          # (Get-Content $swigWrap) `
+          #   -replace 'SWIG_Python_AppendOutput\(([^,]+),\s*([^)]+)\)', 'SWIG_AppendOutput($1, $2)' `
+          #   | Set-Content $swigWrap
 
           @"
           WB_3DPARTY_PATH assembled at $bundle
@@ -597,9 +621,14 @@ jobs:
       - name: Find static library for database connectivity dependencies
         shell: pwsh
         run: |
-          Get-ChildItem -Recurse "D:\a\_temp\vcpkg\installed\x64-windows-static" -Include *.lib |
-            Where-Object { $_.Name -match 'mysqlcppconn|jdbc' } |
-            Select-Object FullName, Name
+          Write-Output "-- TACO --"
+          Get-ChildItem -Recurse D:\a\_temp -Filter result.hpp | Select-Object FullName
+          Get-ChildItem -Recurse D:\a\_temp -Filter execute.hpp | Select-Object FullName
+          Get-ChildItem -Recurse D:\a\_temp -Filter database_exception.hpp | Select-Object FullName
+          Write-Output "-- TACO --"
+          # Get-ChildItem -Recurse "D:\a\_temp\vcpkg\installed\x64-windows-static" -Include *.lib |
+          #   Where-Object { $_.Name -match 'mysqlcppconn|jdbc' } |
+          #   Select-Object FullName, Name
 
       - name: Build Release_OSS x64
         shell: pwsh
