@@ -234,10 +234,17 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v2-v143
+          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v3
           restore-keys: |
             vcpkg-bincache-${{ runner.os }}-x64-
 
+      # - name: Change mysql-connector-cpp to v142
+      #   shell: pwsh
+      #   run: |
+      #     Remove-Item -Recurse -Force "$env:VCPKG_ROOT\buildtrees\mysql-connector-cpp" -ErrorAction SilentlyContinue
+      #     Remove-Item -Recurse -Force "$env:VCPKG_ROOT\packages\mysql-connector-cpp_x64-windows-static*" -ErrorAction SilentlyContinue
+      #     & "$env:VCPKG_ROOT\vcpkg.exe" remove mysql-connector-cpp:x64-windows-static --recurse
+      #     & "$env:VCPKG_ROOT\vcpkg.exe" install mysql-connector-cpp[core,jdbc]:x64-windows-static-v142
 
       - name: Install ANTLR runtime with vcpkg
         shell: pwsh
@@ -315,22 +322,75 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: C:\vcpkg-bincache
-          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v2-v143
+          key: vcpkg-bincache-${{ runner.os }}-x64-workbench-v3
 
-      # - name: Change mysql-connector-cpp to v142
-      #   shell: pwsh
-      #   run: |
-      #     Remove-Item -Recurse -Force "$env:VCPKG_ROOT\buildtrees\mysql-connector-cpp" -ErrorAction SilentlyContinue
-      #     Remove-Item -Recurse -Force "$env:VCPKG_ROOT\packages\mysql-connector-cpp_x64-windows-static*" -ErrorAction SilentlyContinue
-      #     & "$env:VCPKG_ROOT\vcpkg.exe" remove mysql-connector-cpp:x64-windows-static --recurse
-      #     & "$env:VCPKG_ROOT\vcpkg.exe" install mysql-connector-cpp[core,jdbc]:x64-windows-static-v142
 
-      - name: Install sqlitecpp with vcpkg
+      - name: Install vsqlitepp with vcpkg overlay port
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          $portDir = "$env:GITHUB_WORKSPACE\overlay-ports\vsqlitepp"
+          New-Item -ItemType Directory -Force -Path $portDir | Out-Null
+
+          @'
+          {
+            "name": "vsqlitepp",
+            "version-string": "0.3.13",
+            "description": "VSQLite++ C++ wrapper for SQLite3",
+            "homepage": "https://github.com/vinzenz/vsqlite--",
+            "license": "BSD-3-Clause",
+            "dependencies": [
+              "sqlite3"
+            ]
+          }
+          '@ | Set-Content -Path "$portDir\vcpkg.json" -Encoding UTF8NoBOM
+
+          @'
+          vcpkg_from_github(
+              OUT_SOURCE_PATH SOURCE_PATH
+              REPO vinzenz/vsqlite--
+              REF 0.3.13
+              SHA512 70fcd16348e3b2a0854b1d496c68fda7e354068aefbd6a5ad21d7a42afebd2bd746f604240475acfeebe00898ab156f9dfd687346fdf5c77d775262db3a5666e
+              HEAD_REF master
+          )
+
+          file(INSTALL
+              "${SOURCE_PATH}/include/"
+              DESTINATION "${CURRENT_PACKAGES_DIR}/include"
+              FILES_MATCHING
+                  PATTERN "*.h"
+                  PATTERN "*.hpp"
+          )
+
+          if(EXISTS "${SOURCE_PATH}/COPYING")
+              file(INSTALL
+                  "${SOURCE_PATH}/COPYING"
+                  DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}"
+                  RENAME copyright
+              )
+          elseif(EXISTS "${SOURCE_PATH}/LICENSE")
+              file(INSTALL
+                  "${SOURCE_PATH}/LICENSE"
+                  DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}"
+                  RENAME copyright
+              )
+          else()
+              message(FATAL_ERROR "Could not find COPYING or LICENSE in vsqlitepp source tree.")
+          endif()
+
+          file(REMOVE_RECURSE
+              "${CURRENT_PACKAGES_DIR}/debug"
+          )
+          '@ | Set-Content -Path "$portDir\portfile.cmake" -Encoding UTF8NoBOM
+
+          Write-Output "-- Taco2 --"
+          Get-ChildItem -Force $portDir | Format-List Name,FullName,Length
+          Write-Output "-- Taco2 --"
+
           & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            sqlite3:x64-windows sqlitecpp:x64-windows
+            vsqlitepp:x64-windows `
+            --overlay-ports="$env:GITHUB_WORKSPACE\overlay-ports"
 
       - name: Build WB_3DPARTY_PATH bundle
         shell: pwsh
@@ -374,8 +434,8 @@ jobs:
 
             if (Test-Path $Source) {
               Write-Output "-- TACO $Source --"
-              Get-ChildItem -Recurse $Source | Select-Object FullName
-              # Get-ChildItem -Recurse D:\a\_temp -Filter database_exception.hpp | Select-Object FullName
+              # Get-ChildItem -Recurse $Source | Select-Object FullName
+              Get-ChildItem -Recurse D:\a\_temp -Filter database_exception.hpp | Select-Object FullName
               Write-Output "------"
 
               New-Item -ItemType Directory -Force -Path $Destination | Out-Null
@@ -596,10 +656,20 @@ jobs:
           # }
 
           # Avoid:  D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp(98,9): error C2039: '_snprintf_s': is not a member of 'std'
-          $boostHdr = "D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp"
+          # $boostHdr = "D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp"
+          $boostHdr = "D:\a\_temp\vcpkg\installed\x64-windows\include\boost\assert\source_location.hpp"
+          Write-Output "-- Taco3 --"
           (Get-Content $boostHdr) `
             -replace 'std::_snprintf_s', '_snprintf_s' `
             | Set-Content $boostHdr
+          Write-Output (Get-Content $boostHdr)
+          Write-Output "-- Taco4 --"
+          $boostHdr = "D:\a\_temp\vcpkg\installed\x64-windows-static\include\boost\assert\source_location.hpp"
+          (Get-Content $boostHdr) `
+            -replace 'std::_snprintf_s', '_snprintf_s' `
+            | Set-Content $boostHdr
+          Write-Output (Get-Content $boostHdr)
+          Write-Output "-- Taco5 --"
 
           # # Avoid:  D:\a\mysql-workbench\mysql-workbench\library\forms\swig\cairo_wrap.cxx(5422,53): error C2660: 'SWIG_Python_AppendOutput': function does not take 2 arguments
           # $swigWrap = "D:\a\mysql-workbench\mysql-workbench\library\forms\swig\cairo_wrap.cxx"
@@ -622,9 +692,10 @@ jobs:
         shell: pwsh
         run: |
           Write-Output "-- TACO --"
-          Get-ChildItem -Recurse D:\a\_temp -Filter result.hpp | Select-Object FullName
-          Get-ChildItem -Recurse D:\a\_temp -Filter execute.hpp | Select-Object FullName
-          Get-ChildItem -Recurse D:\a\_temp -Filter database_exception.hpp | Select-Object FullName
+          # Get-ChildItem -Recurse D:\a\_temp -Filter result.hpp | Select-Object FullName
+          # Get-ChildItem -Recurse D:\a\_temp -Filter execute.hpp | Select-Object FullName
+          # Get-ChildItem -Recurse D:\a\_temp -Filter database_exception.hpp | Select-Object FullName
+          Get-ChildItem -Recurse D:\a\_temp -Filter mysql_connection.h | Select-Object FullName
           Write-Output "-- TACO --"
           # Get-ChildItem -Recurse "D:\a\_temp\vcpkg\installed\x64-windows-static" -Include *.lib |
           #   Where-Object { $_.Name -match 'mysqlcppconn|jdbc' } |
@@ -640,6 +711,7 @@ jobs:
             /p:Configuration=$env:CONFIGURATION `
             /p:Platform=$env:PLATFORM `
             /p:WB_3DPARTY_PATH="$env:WB_3DPARTY_PATH" `
+            /p:AdditionalIncludeDirectories="$env:WB_3DPARTY_PATH" `
             /p:AdditionalIncludeDirectories="$env:WB_3DPARTY_PATH\jdbc" `
             /verbosity:minimal
 

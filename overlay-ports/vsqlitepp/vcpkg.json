@@ -1,0 +1,10 @@
+{
+  "name": "vsqlitepp",
+  "version-string": "0.3.13",
+  "description": "VSQLite++ C++ wrapper for SQLite3",
+  "homepage": "https://github.com/vinzenz/vsqlite--",
+  "license": "BSD-3-Clause",
+  "dependencies": [
+    "sqlite3"
+  ]
+}
