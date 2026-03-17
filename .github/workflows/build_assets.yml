@@ -656,20 +656,25 @@ jobs:
           # }
 
           # Avoid:  D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp(98,9): error C2039: '_snprintf_s': is not a member of 'std'
-          # $boostHdr = "D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp"
           $boostHdr = "D:\a\_temp\vcpkg\installed\x64-windows\include\boost\assert\source_location.hpp"
           Write-Output "-- Taco3 --"
           (Get-Content $boostHdr) `
-            -replace 'std::_snprintf_s', '_snprintf_s' `
+            -replace 'std::snprintf', 'snprintf' `
             | Set-Content $boostHdr
-          Write-Output (Get-Content $boostHdr)
+          # Write-Output (Get-Content $boostHdr)
           Write-Output "-- Taco4 --"
           $boostHdr = "D:\a\_temp\vcpkg\installed\x64-windows-static\include\boost\assert\source_location.hpp"
           (Get-Content $boostHdr) `
-            -replace 'std::_snprintf_s', '_snprintf_s' `
+            -replace 'std::snprintf', 'snprintf' `
             | Set-Content $boostHdr
-          Write-Output (Get-Content $boostHdr)
+          # Write-Output (Get-Content $boostHdr)
           Write-Output "-- Taco5 --"
+          $boostHdr = "D:\a\_temp\wb-3rdparty\include\boost\assert\source_location.hpp"
+          (Get-Content $boostHdr) `
+            -replace 'std::snprintf', 'snprintf' `
+            | Set-Content $boostHdr
+          # Write-Output (Get-Content $boostHdr)
+          Write-Output "-- Taco6 --"
 
           # # Avoid:  D:\a\mysql-workbench\mysql-workbench\library\forms\swig\cairo_wrap.cxx(5422,53): error C2660: 'SWIG_Python_AppendOutput': function does not take 2 arguments
           # $swigWrap = "D:\a\mysql-workbench\mysql-workbench\library\forms\swig\cairo_wrap.cxx"
@@ -713,6 +718,7 @@ jobs:
             /p:WB_3DPARTY_PATH="$env:WB_3DPARTY_PATH" `
             /p:AdditionalIncludeDirectories="$env:WB_3DPARTY_PATH" `
             /p:AdditionalIncludeDirectories="$env:WB_3DPARTY_PATH\jdbc" `
+            /p:AdditionalIncludeDirectories="D:\a\_temp\wb-3rdparty\include" `
             /verbosity:minimal
 
       # - name: Show output folders when build fails
